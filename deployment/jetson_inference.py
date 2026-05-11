@@ -20,11 +20,16 @@ TRT_LOGGER = trt.Logger(trt.Logger.WARNING)
 def load_engine(engine_file_path):
     """Loads the serialized TensorRT engine from disk."""
     print(f"[*] Loading TensorRT engine from {engine_file_path}...")
-    with open(engine_file_path, "rb") as f, trt.Runtime(TRT_LOGGER) as runtime:
-        return runtime.deserialize_cuda_engine(f.read())
+    try:
+        with open(engine_file_path, "rb") as f, trt.Runtime(TRT_LOGGER) as runtime:
+            return runtime.deserialize_cuda_engine(f.read())
+    except Exception as e:
+        print(f"[!] Error loading engine: {e}")
+        return None
 
 def benchmark_inference(engine, batch_size=1, num_warmup=10, num_iters=100):
     """Runs dummy data through the engine to measure average latency."""
+    # Create the execution context
     context = engine.create_execution_context()
     
     # Define the input shape matching our optimization profile
@@ -36,10 +41,13 @@ def benchmark_inference(engine, batch_size=1, num_warmup=10, num_iters=100):
     input_tensor = torch.randn(input_shape, device='cuda', dtype=torch.float32)
     output_tensor = torch.empty(input_shape, device='cuda', dtype=torch.float32)
 
+    # CRITICAL: Link PyTorch memory addresses to TensorRT context (Required for TRT 10+)
+    context.set_tensor_address("input", input_tensor.data_ptr())
+    context.set_tensor_address("output", output_tensor.data_ptr())
+
     # 1. Warmup (GPU clock speeds take a second to ramp up)
     print(f"[*] Running {num_warmup} warmup iterations...")
     for _ in range(num_warmup):
-        # In TensorRT 8.5+, we pass the memory pointers of the tensors
         context.execute_async_v3(stream_handle=torch.cuda.current_stream().cuda_stream)
 
     # 2. Benchmarking Loop
@@ -48,6 +56,7 @@ def benchmark_inference(engine, batch_size=1, num_warmup=10, num_iters=100):
     start_time = time.time()
     
     for _ in range(num_iters):
+        # Execute asynchronously on the current PyTorch CUDA stream
         context.execute_async_v3(stream_handle=torch.cuda.current_stream().cuda_stream)
         
     torch.cuda.synchronize() # Wait for all inference to finish
@@ -70,9 +79,10 @@ def benchmark_inference(engine, batch_size=1, num_warmup=10, num_iters=100):
     if avg_latency_ms < 15:
         print("[+] SUCCESS: Latency is well within the 11ms DRDO target!")
     else:
-        print("[!] Note: Latency may be higher depending on your current laptop GPU power state.")
+        print("[!] Note: Latency may vary based on your GPU's current power state.")
 
 if __name__ == "__main__":
+    # Ensure this path is correct relative to the script location
     ENGINE_PATH = "models/yolov9_fp16_orin.engine"
     
     # Load the engine we just compiled
@@ -82,4 +92,4 @@ if __name__ == "__main__":
         # Run the benchmark
         benchmark_inference(trt_engine)
     else:
-        print("[!] Failed to load engine. Did you run export_tensorrt.py first?")
+        print("[!] Failed to load engine. Ensure you run export_tensorrt.py first.")
