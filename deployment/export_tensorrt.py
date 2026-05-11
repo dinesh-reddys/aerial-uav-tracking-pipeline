@@ -37,7 +37,7 @@ def export_to_onnx(pytorch_model_path, onnx_model_path, input_shape=(1, 3, 640, 
         dummy_input, 
         onnx_model_path,
         export_params=True,
-        opset_version=13,
+        opset_version=18,
         do_constant_folding=True,
         input_names=['input'],
         output_names=['output'],
@@ -55,6 +55,12 @@ def build_tensorrt_engine(onnx_model_path, engine_file_path, use_fp16=True):
 
     # Define optimization profile for Jetson Orin
     config.set_memory_pool_limit(trt.MemoryPoolType.WORKSPACE, 4 * 1024 * 1024 * 1024) # 4GB workspace
+# --- ADDED: Define Optimization Profile for dynamic batch sizes ---
+    profile = builder.create_optimization_profile()
+    # Parameters: tensor_name, min_shape, optimal_shape, max_shape
+    profile.set_shape("input", (1, 3, 640, 640), (1, 3, 640, 640), (4, 3, 640, 640))
+    config.add_optimization_profile(profile)
+    # ----------------------------------------------------------------
     
     if use_fp16 and builder.platform_has_fast_fp16:
         print("[*] FP16 architecture detected. Enabling FP16 quantization...")
@@ -82,7 +88,7 @@ def build_tensorrt_engine(onnx_model_path, engine_file_path, use_fp16=True):
 
 if __name__ == "__main__":
     # Define paths
-    MODEL_DIR = "../models/"
+    MODEL_DIR = "models/"
     PT_PATH = os.path.join(MODEL_DIR, "yolov9_custom_aerial.pt")
     ONNX_PATH = os.path.join(MODEL_DIR, "yolov9_custom_aerial.onnx")
     TRT_PATH = os.path.join(MODEL_DIR, "yolov9_fp16_orin.engine")
